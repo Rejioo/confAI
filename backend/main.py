@@ -20,6 +20,7 @@ from models import Booking
 from auto_cancel import auto_cancel_expired_bookings
 from time_utils import now_ist_naive
 from sqlalchemy import distinct
+from fastapi import HTTPException
 
 # oauth2_scheme = OAuth2PasswordBearer(tokenUrl="login")
 
@@ -158,19 +159,21 @@ def dashboard_stats(
         Booking.end_time >= now
     ).count()
 
-    available_rooms = total_rooms - rooms_in_use - rooms_booked_now
     upcoming_bookings = db.query(Booking).filter(
-    Booking.status == "booked",
-    Booking.start_time > now
+        Booking.status == "booked",
+        Booking.start_time > now
     ).count()
+
+    available_rooms = total_rooms - rooms_in_use - rooms_booked_now
 
     return {
         "total_rooms": total_rooms,
         "available_rooms": max(available_rooms, 0),
         "rooms_in_use": rooms_in_use,
         "rooms_booked": rooms_booked_now,
-        "upcoming bookings":upcoming_bookings
+        "upcoming_bookings": upcoming_bookings
     }
+
     
 @app.get("/my-schedules")
 def my_schedules(
@@ -184,3 +187,36 @@ def my_schedules(
     ).order_by(Booking.start_time).all()
 
     return bookings
+
+
+@app.post("/check-in")
+def check_in(
+    booking_id: int,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user)
+):
+    now = now_ist_naive()
+
+    booking = db.query(Booking).filter(
+        Booking.id == booking_id
+    ).first()
+
+    if not booking:
+        raise HTTPException(status_code=404, detail="Booking not found")
+
+    if booking.status != "booked":
+        raise HTTPException(status_code=400, detail="Booking not eligible for check-in")
+
+    if not (booking.start_time <= now <= booking.end_time):
+        raise HTTPException(
+            status_code=400,
+            detail="Check-in allowed only during meeting time"
+        )
+
+    booking.status = "in_use"
+    db.commit()
+
+    return {
+        "message": "Checked in successfully",
+        "room_id": booking.room_id
+    }

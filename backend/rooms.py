@@ -10,6 +10,7 @@ def seed_rooms(db: Session):
         Room(name="Conference Room B", capacity=8),
         Room(name="Huddle Room 1", capacity=4),
         Room(name="Huddle Room 2", capacity=4),
+        Room(name="big brain", capacity=7),
     ]
 
     db.add_all(rooms)

@@ -35,7 +35,7 @@ class Booking(Base):
     start_time = Column(DateTime, nullable=False)
     end_time = Column(DateTime, nullable=False)
     status = Column(String, default="booked")  # booked | in_use | cancelled
-    created_at = Column(DateTime, default=now_ist_naive())
+    created_at = Column(DateTime, default=now_ist_naive)
 
     room = relationship("Room", back_populates="bookings")
     host = relationship("User", back_populates="bookings")
