@@ -21,6 +21,15 @@ from auto_cancel import auto_cancel_expired_bookings
 from time_utils import now_ist_naive
 from sqlalchemy import distinct
 from fastapi import HTTPException
+from schemas.chat_intent import ChatIntent
+from chat_llm import call_llm
+from participant_utils import extract_participants_from_text
+from room_utils import extract_room_name
+from time_parser import extract_date_time
+from typing import Dict
+from datetime import datetime
+import re
+from intent_utils import infer_intent_from_text
 
 # oauth2_scheme = OAuth2PasswordBearer(tokenUrl="login")
 
@@ -34,6 +43,54 @@ from fastapi import HTTPException
 #         raise HTTPException(status_code=401, detail="User not found")
 
 #     return user
+pending_bookings: Dict[int, dict] = {}
+
+def empty_booking(intent: str):
+    return {
+        "intent": intent,               # online / offline / unknown
+        "room_name": None,
+        "date": None,
+        "start_time": None,
+        "end_time": None,
+        "participants": []
+    }
+pending_bookings = {}
+def empty_booking(intent: str):
+    return {
+        "intent": intent,
+        "room_name": None,
+        "date": None,
+        "start_time": None,
+        "end_time": None,
+        "participants": []
+    }
+def merge_booking(existing: dict, new: dict):
+    for key, value in new.items():
+        if value is None:
+            continue
+        if key == "participants":
+            if value:
+                existing["participants"] = list(set(existing["participants"] + value))
+        else:
+            existing[key] = value
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 security = HTTPBearer()
 
 def get_current_user(
@@ -72,8 +129,10 @@ def health_check():
 
 @app.post("/register")
 def register(name: str, email: str, password: str, db: Session = Depends(get_db)):
-    if not email.endswith("@company.com"):
-        raise HTTPException(status_code=403, detail="Only company employees allowed")
+    # if not email.endswith("@company.com"):
+    #     raise HTTPException(status_code=403, detail="Only company employees allowed")
+    if "@" not in email:
+        raise HTTPException(status_code=400, detail="Invalid email")
 
     existing_user = db.query(User).filter(User.email == email).first()
     if existing_user:
@@ -219,4 +278,119 @@ def check_in(
     return {
         "message": "Checked in successfully",
         "room_id": booking.room_id
+    }
+    
+
+
+@app.post("/chat")
+def chat(
+    message: str,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user)
+):
+    user_id = user.id
+    msg = message.lower()
+
+    # -------------------------------
+    # 1. INTENT RESOLUTION
+    # -------------------------------
+
+    # rule-based intent (strong signals)
+    rule_intent = infer_intent_from_text(msg)
+
+    # llm intent (weak / fallback)
+    llm_intent = call_llm(message).get("intent", "unknown")
+
+    if rule_intent != "unknown":
+        intent_type = rule_intent
+    else:
+        intent_type = llm_intent
+
+    # -------------------------------
+    # 2. CREATE / FETCH BOOKING STATE
+    # -------------------------------
+
+    if user_id not in pending_bookings:
+        pending_bookings[user_id] = empty_booking(intent_type)
+
+    booking = pending_bookings[user_id]
+
+    # upgrade intent if previously unknown
+    if booking["intent"] == "unknown" and intent_type != "unknown":
+        booking["intent"] = intent_type
+
+    # fallback: room implies offline
+    if booking["intent"] == "unknown" and extract_room_name(msg):
+        booking["intent"] = "book_offline_meeting"
+
+    # still unknown → ASK
+    if booking["intent"] == "unknown":
+        return {
+            "type": "ask",
+            "message": "Is this an online or offline meeting?"
+        }
+
+    # -------------------------------
+    # 3. SLOT EXTRACTION
+    # -------------------------------
+    from participant_llm import extract_participants_llm
+
+    extracted = {
+        "room_name": extract_room_name(msg),
+        # "participants": extract_participants_from_text(msg)
+        "participants": extract_participants_from_text(msg)
+
+    }
+
+    date, parsed_start, parsed_end = extract_date_time(msg)
+    extracted["date"] = date
+
+    # time handling (context-aware)
+    if parsed_start and not booking["start_time"]:
+        extracted["start_time"] = parsed_start
+    elif parsed_start and booking["start_time"] and not booking["end_time"]:
+        extracted["end_time"] = parsed_start
+
+    if parsed_end:
+        extracted["end_time"] = parsed_end
+
+    # merge into booking
+    merge_booking(booking, extracted)
+
+    # -------------------------------
+    # 4. SLOT VALIDATION
+    # -------------------------------
+
+    missing = []
+
+    if booking["intent"] == "book_offline_meeting":
+        if not booking["room_name"]:
+            missing.append("room name")
+
+    if not booking["date"]:
+        missing.append("date")
+    if not booking["start_time"]:
+        missing.append("start time")
+    if not booking["end_time"]:
+        missing.append("end time")
+    if not booking["participants"]:
+        missing.append("participants")
+
+    # -------------------------------
+    # 5. ASK OR CONFIRM
+    # -------------------------------
+
+    if missing:
+        return {
+            "type": "ask",
+            "message": f"I need the following details: {', '.join(missing)}"
+        }
+
+    # confirmed → cleanup state
+    confirmed_booking = booking.copy()
+    del pending_bookings[user_id]
+
+    return {
+        "type": "confirm",
+        "booking": confirmed_booking
     }
