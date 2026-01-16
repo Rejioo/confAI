@@ -5,7 +5,7 @@ SMTP_SERVER = "smtp.gmail.com"
 SMTP_PORT = 587
 
 GMAIL_USER = "rajitkumaran27@gmail.com"
-GMAIL_APP_PASSWORD = "kugj lxnd rtza tapk"
+GMAIL_APP_PASSWORD = "buaj yfkv eran izje"
 
 
 def send_email(to_emails: list[str], subject: str, body: str):

@@ -1,7 +1,10 @@
 KNOWN_ROOMS = [
     "conference room a",
     "conference room b",
-    "huddle room"
+    "huddle room 1",
+    "huddle room 2",
+    "big brain",
+    
 ]
 
 def extract_room_name(message: str):

@@ -34,6 +34,10 @@ from booking_service import create_booking
 from room_resolver import resolve_room_id
 from bookings import is_room_available
 from datetime import datetime
+from datetime import datetime, timedelta
+from auto_cancel import auto_cancel_expired_bookings
+
+
 # oauth2_scheme = OAuth2PasswordBearer(tokenUrl="login")
 
 # def get_current_user(token: str = Depends(oauth2_scheme), db: Session = Depends(get_db)):
@@ -152,25 +156,108 @@ def register(name: str, email: str, password: str, db: Session = Depends(get_db)
 
     return {"message": "User registered successfully"}
 
+# @app.post("/login")
+# def login(email: str, password: str, db: Session = Depends(get_db)):
+#     user = db.query(User).filter(User.email == email).first()
+#     if not user or not verify_password(password, user.password):
+#         raise HTTPException(status_code=401, detail="Invalid credentials")
+
+#     token = create_access_token({"user_id": user.id, "email": user.email})
+
+#     return {
+#         "access_token": token,
+#         "token_type": "bearer"
+#     }\
+# from schemas.auth import LoginRequest
+# @app.post("/login")
+# def login(payload: LoginRequest, db: Session = Depends(get_db)):
+#     user = db.query(User).filter(User.email == payload.email).first()
+
+#     if not user or not verify_password(payload.password, user.password):
+#         raise HTTPException(status_code=401, detail="Invalid credentials")
+
+#     token = create_access_token({
+#         "user_id": user.id,
+#         "email": user.email
+#     })
+
+#     return {
+#         "access_token": token,
+#         "token_type": "bearer"
+#     }
+
+@app.get("/me")
+def get_me(user: User = Depends(get_current_user)):
+    return {
+        "id": user.id,
+        "name": user.name,
+        "email": user.email
+    }
+
 @app.post("/login")
 def login(email: str, password: str, db: Session = Depends(get_db)):
     user = db.query(User).filter(User.email == email).first()
+
     if not user or not verify_password(password, user.password):
         raise HTTPException(status_code=401, detail="Invalid credentials")
 
-    token = create_access_token({"user_id": user.id, "email": user.email})
+    token = create_access_token({
+        "user_id": user.id,
+        "email": user.email
+    })
 
     return {
         "access_token": token,
         "token_type": "bearer"
     }
 
+# @app.post("/login")
+# def login(email: str, password: str, db: Session = Depends(get_db)):
+#     user = db.query(User).filter(User.email == email).first()
+
+#     if not user or not verify_password(password, user.password):
+#         raise HTTPException(status_code=401, detail="Invalid credentials")
+
+#     token = create_access_token({
+#         "user_id": user.id,
+#         "email": user.email
+#     })
+
+#     return {
+#         "access_token": token,
+#         "token_type": "bearer"
+#     }
+
+
 @app.get("/rooms")
-def list_rooms(db: Session = Depends(get_db)):
-    rooms = db.query(Room).all()
-    return rooms
+def get_rooms(
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user)
+):
+    auto_cancel_expired_bookings(db)
+
+    return db.query(Room).all()
 
 
+@app.get("/room/{room_id}/bookings")
+def get_room_bookings(
+    room_id: int,
+    date: str,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user)
+):
+    auto_cancel_expired_bookings(db)
+    start_day = datetime.fromisoformat(f"{date}T09:00")
+    end_day = datetime.fromisoformat(f"{date}T18:00")
+
+    bookings = db.query(Booking).filter(
+        Booking.room_id == room_id,
+        Booking.start_time < end_day,
+        Booking.end_time > start_day,
+        Booking.status != "cancelled"
+    ).all()
+
+    return bookings
 
 @app.post("/book-room")
 def book_room(
@@ -205,6 +292,8 @@ def dashboard_stats(
     db: Session = Depends(get_db),
     user: User = Depends(get_current_user)
 ):
+    auto_cancel_expired_bookings(db)
+
     now = now_ist_naive()
 
     total_rooms = db.query(Room).count()
@@ -242,6 +331,8 @@ def my_schedules(
     db: Session = Depends(get_db),
     user: User = Depends(get_current_user)
 ):
+    auto_cancel_expired_bookings(db)
+
     name = user.name.lower()
 
     bookings = db.query(Booking).filter(
@@ -269,6 +360,7 @@ def check_in(
     db: Session = Depends(get_db),
     user: User = Depends(get_current_user)
 ):
+    auto_cancel_expired_bookings(db)
     now = now_ist_naive()
 
     booking = db.query(Booking).filter(
@@ -319,6 +411,8 @@ def chat(
     db: Session = Depends(get_db),
     user: User = Depends(get_current_user)
 ):
+    auto_cancel_expired_bookings(db)
+
     user_id = user.id
     msg = message.lower()
     
@@ -392,6 +486,7 @@ def chat(
     # -------------------------------
     # 4. SLOT VALIDATION
     # -------------------------------
+    from chat_prompt import ask_missing_fields
 
     missing = []
 
@@ -412,11 +507,26 @@ def chat(
     # 5. ASK OR CONFIRM
     # -------------------------------
 
+    # if missing:
+    #     return {
+    #         "type": "ask",
+    #         "message": f"I need the following details: {', '.join(missing)}"
+    #     }
+    ##################################################################
+    # from chat_prompt import ask_missing_fields
+
+    # if missing:
+    #     natural_question = ask_missing_fields(missing)
+    #     return {
+    #         "type": "ask",
+    #         "message": natural_question
+    #     }
     if missing:
         return {
             "type": "ask",
-            "message": f"I need the following details: {', '.join(missing)}"
+            "message": ask_missing_fields(missing)
         }
+
 
     # confirmed → cleanup state
     confirmed_booking = booking.copy()
